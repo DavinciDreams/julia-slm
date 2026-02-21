@@ -1,0 +1,37 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/deps.jl
+deps/build.log
+
+# Python (notebooks)
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Data (root-level data directory only)
+/data/
+*.txt
+*.jsonl
+!src/**/*.jl
+
+# Model artifacts
+checkpoints/
+*.jld2
+*.bson
+*.gguf
+*.bin
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
