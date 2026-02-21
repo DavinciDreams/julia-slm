@@ -1,0 +1,54 @@
+# Base config — primary baseline (~15M params)
+
+[model]
+arch = "transformer"
+embed_dim = 384
+n_layers = 6
+n_heads = 3
+head_dim = 128
+ffn_mult = 4
+context_length = 256
+dropout = 0.0
+bias = false
+weight_tying = true
+
+[training]
+optimizer = "adamw"
+lr = 6e-4
+min_lr = 6e-5
+warmup_steps = 100
+max_steps = 5000
+batch_size = 64
+grad_clip = 1.0
+precision = "f16"
+eval_interval = 250
+eval_steps = 50
+checkpoint_interval = 1000
+seed = 42
+
+[training.curriculum]
+enabled = false
+ordering = "easy_first"
+warmup_epochs = 1
+
+[training.coreset]
+enabled = false
+method = "gradient_norm"
+keep_fraction = 0.5
+
+[training.phase_weights]
+trivium = 0.40
+quadrivium = 0.35
+bridging = 0.25
+
+[data]
+train_path = "../text-pipeline/output/train.txt"
+val_path = "../text-pipeline/output/val.txt"
+enriched_path = "../text-pipeline/output/train_enriched.jsonl"
+
+[inference]
+precision = "f16"
+compile = false
+temperature = 0.8
+top_k = 40
+max_new_tokens = 500

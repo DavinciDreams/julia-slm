@@ -1,0 +1,46 @@
+"""
+Training metrics tracking and logging.
+"""
+
+mutable struct TrainMetrics
+    step::Int
+    total_loss::Float64
+    n_samples::Int
+    best_val_loss::Float64
+    start_time::Float64
+    step_start::Float64
+    tokens_processed::Int
+end
+
+function TrainMetrics()
+    t = time()
+    return TrainMetrics(0, 0.0, 0, Inf, t, t, 0)
+end
+
+function update_metrics!(m::TrainMetrics, loss::Float64, n_tokens::Int)
+    m.total_loss += loss
+    m.n_samples += 1
+    m.tokens_processed += n_tokens
+end
+
+function reset_metrics!(m::TrainMetrics)
+    m.total_loss = 0.0
+    m.n_samples = 0
+    m.step_start = time()
+    m.tokens_processed = 0
+end
+
+function avg_loss(m::TrainMetrics)
+    m.n_samples > 0 ? m.total_loss / m.n_samples : 0.0
+end
+
+function log_metrics(m::TrainMetrics, lr::Float64, grad_norm::Float64; prefix="train")
+    elapsed = time() - m.step_start
+    tok_per_sec = m.tokens_processed / max(elapsed, 1e-6)
+    loss = avg_loss(m)
+    ppl = exp(loss)
+    total_elapsed = time() - m.start_time
+
+    @printf("[step %5d] %s loss: %.4f | ppl: %.2f | lr: %.2e | grad_norm: %.4f | tok/s: %.0f | elapsed: %.1fs\n",
+            m.step, prefix, loss, ppl, lr, grad_norm, tok_per_sec, total_elapsed)
+end

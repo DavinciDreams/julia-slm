@@ -1,0 +1,49 @@
+# Tiny config — smoke test, fast iteration (~1M params)
+
+[model]
+arch = "transformer"
+embed_dim = 192
+n_layers = 3
+n_heads = 3
+head_dim = 64
+ffn_mult = 4
+context_length = 128
+dropout = 0.0
+bias = false
+weight_tying = true
+
+[training]
+optimizer = "adamw"
+lr = 1e-3
+min_lr = 1e-4
+warmup_steps = 50
+max_steps = 1000
+batch_size = 32
+grad_clip = 1.0
+precision = "f32"
+eval_interval = 100
+eval_steps = 10
+checkpoint_interval = 500
+seed = 42
+
+[training.curriculum]
+enabled = false
+ordering = "easy_first"
+warmup_epochs = 1
+
+[training.coreset]
+enabled = false
+method = "gradient_norm"
+keep_fraction = 0.5
+
+[data]
+train_path = "../text-pipeline/output/train.txt"
+val_path = "../text-pipeline/output/val.txt"
+enriched_path = "../text-pipeline/output/train_enriched.jsonl"
+
+[inference]
+precision = "f32"
+compile = false
+temperature = 0.8
+top_k = 20
+max_new_tokens = 200
