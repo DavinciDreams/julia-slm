@@ -25,6 +25,8 @@ mutable struct DataLoader
     context_length::Int
     position::Int
     device::Function
+    x_buf::Matrix{Int}
+    y_buf::Matrix{Int}
 end
 
 """
@@ -34,7 +36,9 @@ Create a batched data loader that serves (input, target) pairs of shape
 (context_length, batch_size). Targets are inputs shifted by one position.
 """
 function DataLoader(dataset::TextDataset, batch_size::Int, context_length::Int; device=identity)
-    return DataLoader(dataset, batch_size, context_length, 1, device)
+    x_buf = Matrix{Int}(undef, context_length, batch_size)
+    y_buf = Matrix{Int}(undef, context_length, batch_size)
+    return DataLoader(dataset, batch_size, context_length, 1, device, x_buf, y_buf)
 end
 
 """
@@ -54,15 +58,16 @@ function next_batch!(loader::DataLoader)
     # Each sequence needs T+1 tokens (T inputs + 1 target for the last position)
     seq_len = T + 1
 
-    x = Matrix{Int}(undef, T, B)
-    y = Matrix{Int}(undef, T, B)
+    # Check if the entire batch would overflow — reset once before the loop
+    total_needed = B * T + seq_len - T  # first item needs seq_len, rest stride by T
+    if loader.position + total_needed - 1 > n
+        loader.position = 1
+    end
+
+    x = loader.x_buf
+    y = loader.y_buf
 
     for b in 1:B
-        # Wrap around if we would exceed the data
-        if loader.position + seq_len - 1 > n
-            loader.position = 1
-        end
-
         start = loader.position
         chunk = @view tokens[start:start+seq_len-1]
 
@@ -86,6 +91,78 @@ function reset!(loader::DataLoader)
 end
 
 function n_batches(loader::DataLoader)
-    usable = loader.dataset.n_tokens - loader.context_length
+    usable = loader.dataset.n_tokens - (loader.context_length + 1)
     return max(1, usable ÷ (loader.context_length * loader.batch_size))
+end
+
+# ─────────────────────────────────────────────
+# Curriculum DataLoader — sequence length warmup
+# ─────────────────────────────────────────────
+
+"""
+    CurriculumDataLoader
+
+A wrapper around DataLoader that progressively increases the context length
+during training. Starts with `min_context` and linearly ramps to `max_context`
+over `warmup_steps` optimizer steps.
+"""
+mutable struct CurriculumDataLoader
+    dataset::TextDataset
+    batch_size::Int
+    min_context::Int
+    max_context::Int
+    warmup_steps::Int
+    current_step::Int
+    position::Int
+    device::Function
+end
+
+"""
+    CurriculumDataLoader(dataset, batch_size, max_context;
+                         min_context=32, warmup_steps=1000, device=identity)
+
+Create a curriculum data loader with progressive sequence length warmup.
+"""
+function CurriculumDataLoader(dataset::TextDataset, batch_size::Int, max_context::Int;
+                               min_context::Int=32, warmup_steps::Int=1000, device=identity)
+    return CurriculumDataLoader(dataset, batch_size, min_context, max_context,
+                                 warmup_steps, 0, 1, device)
+end
+
+function current_context_length(cl::CurriculumDataLoader)
+    progress = min(cl.current_step / max(cl.warmup_steps, 1), 1.0)
+    len = cl.min_context + round(Int, progress * (cl.max_context - cl.min_context))
+    # Round to multiple of 8 for alignment
+    return max(cl.min_context, (len ÷ 8) * 8)
+end
+
+function next_batch!(cl::CurriculumDataLoader)
+    T = current_context_length(cl)
+    B = cl.batch_size
+    tokens = cl.dataset.tokens
+    n = cl.dataset.n_tokens
+    seq_len = T + 1
+
+    total_needed = B * T + seq_len - T
+    if cl.position + total_needed - 1 > n
+        cl.position = 1
+    end
+
+    x = Matrix{Int}(undef, T, B)
+    y = Matrix{Int}(undef, T, B)
+
+    for b in 1:B
+        start = cl.position
+        chunk = @view tokens[start:start+seq_len-1]
+        x[:, b] .= chunk[1:T]
+        y[:, b] .= chunk[2:T+1]
+        cl.position += T
+    end
+
+    cl.current_step += 1
+    return cl.device(x), cl.device(y)
+end
+
+function reset!(cl::CurriculumDataLoader)
+    cl.position = 1
 end

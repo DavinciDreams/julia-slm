@@ -101,6 +101,6 @@ Returns 0 for allowed positions, -Inf for masked positions.
 """
 function make_causal_mask(seq_len::Int; dtype::Type{<:AbstractFloat}=Float32)
     # Non-mutating construction for Zygote compatibility
-    mask = dtype[i >= j ? zero(dtype) : typemin(dtype) for i in 1:seq_len, j in 1:seq_len]
+    mask = dtype[j <= i ? zero(dtype) : typemin(dtype) for i in 1:seq_len, j in 1:seq_len]
     return mask
 end

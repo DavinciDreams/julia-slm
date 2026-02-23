@@ -1,6 +1,7 @@
 module JuliaGPT
 
 using Lux
+using Functors
 using Functors: fmap, fleaves
 using NNlib
 using Optimisers
@@ -16,23 +17,31 @@ using Dates
 
 # Model configuration
 include("model/config.jl")
-export ModelConfig, load_config
+export ModelConfig, TrainingConfig, Config, load_config
 
 # Shared layers
 include("model/layers.jl")
-export RMSNorm, SwiGLU
+export RMSNorm, SwiGLU, make_causal_mask
+
+# Mixture of Experts
+include("model/moe.jl")
+export SparseMoE
+
+# Chunked attention
+include("model/attention.jl")
+export chunked_attention, chunked_causal_attention
 
 # Tokenizer
 include("data/tokenizer.jl")
-export CharTokenizer, encode, decode, vocab_size
+export CharTokenizer, BPETokenizer, encode, decode, vocab_size
 
 # Data loading
 include("data/dataloader.jl")
-export TextDataset, DataLoader, next_batch!
+export TextDataset, DataLoader, CurriculumDataLoader, next_batch!
 
 # Model architecture
 include("model/julia_gpt.jl")
-export JuliaGPTModel, create_model
+export JuliaGPTModel, TiedEmbeddingHead, create_model, count_parameters
 
 # Training
 include("training/metrics.jl")
@@ -44,10 +53,19 @@ export create_optimizer, cosine_lr
 include("training/checkpoint.jl")
 export save_checkpoint, load_checkpoint
 
+include("training/ema.jl")
+export EMAState, update_ema!, ema_parameters, copy_ema_to_model!
+
+include("training/amp.jl")
+export LossScaler, scale_loss, unscale_grads, update_scaler!, cast_f16, cast_f32, check_overflow
+
 include("training/trainer.jl")
-export train!
+export train!, cross_entropy_loss
 
 # Inference
+include("inference/kv_cache.jl")
+export KVCache, advance_cache!, generate_with_cache
+
 include("inference/generate.jl")
 export generate
 

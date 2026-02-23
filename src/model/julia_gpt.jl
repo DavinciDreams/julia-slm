@@ -93,9 +93,7 @@ function (l::CausalSelfAttention)(x, ps, st; rope_cos=nothing, rope_sin=nothing,
     # Attention scores: q^T k / sqrt(head_dim)
     # Reshape for batched matmul: treat (n_heads, batch) as batch dims
     scale = Float32(1.0 / sqrt(Float64(HD)))
-
-    # Compute attention: (T, T, H*B)
-    # scores[i,j,h,b] = sum_d q[d,i,h,b] * k[d,j,h,b] / sqrt(HD)
+    # Reshape for batched matmul: merge (n_heads, batch) into batch dim
     q_r = reshape(q, HD, T, H * B)  # (HD, T, H*B)
     k_r = reshape(k, HD, T, H * B)  # (HD, T, H*B)
     attn = NNlib.batched_mul(permutedims(q_r, (2, 1, 3)), k_r)  # (T, T, H*B)
@@ -165,6 +163,30 @@ function (block::TransformerBlock)(x, ps, st; rope_cos=nothing, rope_sin=nothing
 end
 
 # ─────────────────────────────────────────────
+# Tied Embedding Head (weight tying)
+# ─────────────────────────────────────────────
+
+struct TiedEmbeddingHead <: Lux.AbstractLuxLayer
+    vocab_size::Int
+    embed_dim::Int
+end
+
+Lux.initialparameters(::AbstractRNG, ::TiedEmbeddingHead) = NamedTuple()
+Lux.initialstates(::AbstractRNG, ::TiedEmbeddingHead) = NamedTuple()
+Lux.parameterlength(::TiedEmbeddingHead) = 0
+Lux.statelength(::TiedEmbeddingHead) = 0
+
+function (l::TiedEmbeddingHead)(x, ps, st; embedding_weight=nothing)
+    # x: (embed_dim, seq_len, batch)
+    # embedding_weight: (embed_dim, vocab_size) from Lux.Embedding
+    # logits = embedding_weight' * x = (vocab_size, seq_len, batch)
+    D, T, B = size(x)
+    x_flat = reshape(x, D, T * B)
+    logits = embedding_weight' * x_flat
+    return reshape(logits, l.vocab_size, T, B), st
+end
+
+# ─────────────────────────────────────────────
 # Full Model
 # ─────────────────────────────────────────────
 
@@ -173,7 +195,7 @@ struct JuliaGPTModel <: Lux.AbstractLuxContainerLayer{(:tok_emb, :rope, :blocks,
     rope::RotaryEmbedding
     blocks::NamedTuple
     ln_f::RMSNorm
-    head::Lux.Dense
+    head  # Union{Lux.Dense, TiedEmbeddingHead}
     config::ModelConfig
 end
 
@@ -181,6 +203,7 @@ end
     create_model(config::ModelConfig) -> JuliaGPTModel
 
 Build a JuliaGPT model from a configuration struct.
+Uses weight tying (shared embedding/output weights) when config.weight_tying is true.
 """
 function create_model(config::ModelConfig)
     tok_emb = Lux.Embedding(config.vocab_size => config.embed_dim)
@@ -196,7 +219,11 @@ function create_model(config::ModelConfig)
     blocks = NamedTuple{block_names}(Tuple(block_layers))
 
     ln_f = RMSNorm(config.embed_dim)
-    head = Lux.Dense(config.embed_dim => config.vocab_size; use_bias=config.bias)
+    head = if config.weight_tying
+        TiedEmbeddingHead(config.vocab_size, config.embed_dim)
+    else
+        Lux.Dense(config.embed_dim => config.vocab_size; use_bias=config.bias)
+    end
 
     return JuliaGPTModel(tok_emb, rope, blocks, ln_f, head, config)
 end
@@ -229,14 +256,11 @@ function (model::JuliaGPTModel)(x, ps, st)
     # Final norm
     h, st_ln = model.ln_f(h, ps.ln_f, st.ln_f)
 
-    # Project to vocab logits: (embed_dim, seq_len, batch) → (vocab_size, seq_len, batch)
-    if model.config.weight_tying
+    # Project to vocab logits
+    if model.head isa TiedEmbeddingHead
         # Weight tying: reuse embedding weight as output projection
-        emb_weight = ps.tok_emb.weight  # (embed_dim, vocab_size)
-        h_flat = reshape(h, size(h, 1), :)  # (embed_dim, T*B)
-        logits_flat = emb_weight' * h_flat  # (vocab_size, T*B)
-        logits = reshape(logits_flat, :, T, size(x, 2))
-        st_head = st.head
+        logits, st_head = model.head(h, ps.head, st.head;
+                                      embedding_weight=ps.tok_emb.weight)
     else
         logits, st_head = model.head(h, ps.head, st.head)
     end

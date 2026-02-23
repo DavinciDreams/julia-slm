@@ -15,6 +15,13 @@ Base.@kwdef struct ModelConfig
     dropout::Float32 = 0.0f0
     bias::Bool = false
     weight_tying::Bool = true
+    # Mixture of Experts
+    use_moe::Bool = false
+    n_experts::Int = 8
+    moe_top_k::Int = 2
+    # Chunked attention
+    use_chunked_attn::Bool = false
+    attn_chunk_size::Int = 64
 end
 
 Base.@kwdef struct TrainingConfig
@@ -26,6 +33,9 @@ Base.@kwdef struct TrainingConfig
     max_steps::Int = 5000
     batch_size::Int = 64
     grad_clip::Float64 = 1.0
+    label_smoothing::Float64 = 0.0
+    accumulation_steps::Int = 1
+    ema_decay::Float64 = 0.0   # 0 = disabled; typical: 0.999
     precision::String = "f32"
     eval_interval::Int = 250
     eval_steps::Int = 50
@@ -89,6 +99,11 @@ function load_config(path::String)
         dropout = Float32(get(m, "dropout", 0.0)),
         bias = get(m, "bias", false),
         weight_tying = get(m, "weight_tying", true),
+        use_moe = get(m, "use_moe", false),
+        n_experts = get(m, "n_experts", 8),
+        moe_top_k = get(m, "moe_top_k", 2),
+        use_chunked_attn = get(m, "use_chunked_attn", false),
+        attn_chunk_size = get(m, "attn_chunk_size", 64),
     )
 
     t = get(raw, "training", Dict())
@@ -101,6 +116,9 @@ function load_config(path::String)
         max_steps = get(t, "max_steps", 5000),
         batch_size = get(t, "batch_size", 64),
         grad_clip = get(t, "grad_clip", 1.0),
+        label_smoothing = get(t, "label_smoothing", 0.0),
+        accumulation_steps = get(t, "accumulation_steps", 1),
+        ema_decay = get(t, "ema_decay", 0.0),
         precision = get(t, "precision", "f32"),
         eval_interval = get(t, "eval_interval", 250),
         eval_steps = get(t, "eval_steps", 50),
