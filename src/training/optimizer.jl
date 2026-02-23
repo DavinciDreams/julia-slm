@@ -25,7 +25,7 @@ Create an optimizer from training configuration.
 """
 function create_optimizer(config::TrainingConfig)
     if config.optimizer == "adamw"
-        return Optimisers.AdamW(; eta=Float32(config.lr), lambda=Float32(0.1))
+        return Optimisers.AdamW(; eta=Float32(config.lr), lambda=Float32(config.weight_decay))
     else
         error("Unknown optimizer: $(config.optimizer)")
     end
@@ -38,10 +38,6 @@ Update the learning rate in an optimizer state tree.
 Walks the tree and updates all AdamW leaves.
 """
 function update_lr!(opt_state, new_lr::Float64)
-    for leaf in Optimisers.trainables(opt_state)
-        # Optimisers.jl stores the rule in the state; we rebuild with adjusted_state
-    end
-    # Note: Optimisers.jl v0.4+ uses Optimisers.adjust!(opt_state, eta=new_lr)
     Optimisers.adjust!(opt_state; eta=Float32(new_lr))
     return opt_state
 end

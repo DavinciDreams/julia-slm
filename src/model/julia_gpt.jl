@@ -93,13 +93,11 @@ function (l::CausalSelfAttention)(x, ps, st; rope_cos=nothing, rope_sin=nothing,
     # Attention scores: q^T k / sqrt(head_dim)
     # Reshape for batched matmul: treat (n_heads, batch) as batch dims
     scale = Float32(1.0 / sqrt(Float64(HD)))
-    q_perm = permutedims(q, (1, 2, 3, 4))  # (HD, T, H, B)
-    k_perm = permutedims(k, (1, 2, 3, 4))
 
-    # Compute attention: (T, T, H, B)
+    # Compute attention: (T, T, H*B)
     # scores[i,j,h,b] = sum_d q[d,i,h,b] * k[d,j,h,b] / sqrt(HD)
-    q_r = reshape(q_perm, HD, T, H * B)  # (HD, T, H*B)
-    k_r = reshape(k_perm, HD, T, H * B)  # (HD, T, H*B)
+    q_r = reshape(q, HD, T, H * B)  # (HD, T, H*B)
+    k_r = reshape(k, HD, T, H * B)  # (HD, T, H*B)
     attn = NNlib.batched_mul(permutedims(q_r, (2, 1, 3)), k_r)  # (T, T, H*B)
     attn = attn .* scale
 
@@ -232,7 +230,16 @@ function (model::JuliaGPTModel)(x, ps, st)
     h, st_ln = model.ln_f(h, ps.ln_f, st.ln_f)
 
     # Project to vocab logits: (embed_dim, seq_len, batch) → (vocab_size, seq_len, batch)
-    logits, st_head = model.head(h, ps.head, st.head)
+    if model.config.weight_tying
+        # Weight tying: reuse embedding weight as output projection
+        emb_weight = ps.tok_emb.weight  # (embed_dim, vocab_size)
+        h_flat = reshape(h, size(h, 1), :)  # (embed_dim, T*B)
+        logits_flat = emb_weight' * h_flat  # (vocab_size, T*B)
+        logits = reshape(logits_flat, :, T, size(x, 2))
+        st_head = st.head
+    else
+        logits, st_head = model.head(h, ps.head, st.head)
+    end
 
     new_st = (tok_emb=st_emb, rope=st_rope, blocks=st_blocks, ln_f=st_ln, head=st_head)
     return logits, new_st
@@ -244,20 +251,28 @@ end
 Move array `x` to the same device as `reference`.
 On CPU this is a no-op; on GPU it converts to CuArray.
 """
-_to_device(::AbstractArray, x::AbstractArray) = x  # CPU → CPU: no-op
-# GPU dispatch will be added by CUDA extension when available
+function _to_device(reference::AbstractArray, x::AbstractArray)
+    if reference isa CUDA.CuArray
+        return CUDA.cu(x)
+    end
+    return x
+end
 
 """
-    count_parameters(ps) -> Int
+    count_parameters(ps; weight_tying=false) -> Int
 
 Count total number of trainable parameters in a parameter tree.
+When weight_tying=true, subtracts the head weight (shared with embedding).
 """
-function count_parameters(ps)
+function count_parameters(ps; weight_tying::Bool=false)
     n = 0
     for x in fleaves(ps)
         if x isa AbstractArray
             n += length(x)
         end
+    end
+    if weight_tying && hasproperty(ps, :head) && hasproperty(ps.head, :weight)
+        n -= length(ps.head.weight)
     end
     return n
 end

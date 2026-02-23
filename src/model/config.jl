@@ -21,6 +21,7 @@ Base.@kwdef struct TrainingConfig
     optimizer::String = "adamw"
     lr::Float64 = 6e-4
     min_lr::Float64 = 6e-5
+    weight_decay::Float64 = 0.1
     warmup_steps::Int = 100
     max_steps::Int = 5000
     batch_size::Int = 64
@@ -95,6 +96,7 @@ function load_config(path::String)
         optimizer = get(t, "optimizer", "adamw"),
         lr = get(t, "lr", 6e-4),
         min_lr = get(t, "min_lr", 6e-5),
+        weight_decay = get(t, "weight_decay", 0.1),
         warmup_steps = get(t, "warmup_steps", 100),
         max_steps = get(t, "max_steps", 5000),
         batch_size = get(t, "batch_size", 64),

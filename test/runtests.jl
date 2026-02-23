@@ -91,13 +91,15 @@ using Zygote
     @testset "CausalMask" begin
         mask = make_causal_mask(4)
         @test size(mask) == (4, 4)
-        # Lower triangle should be 0
+        # Diagonal and lower triangle should be 0 (can attend to past and self)
         @test mask[1, 1] == 0.0f0
-        @test mask[1, 2] == 0.0f0
+        @test mask[2, 1] == 0.0f0
         @test mask[2, 2] == 0.0f0
-        # Upper triangle should be -Inf
-        @test mask[2, 1] == typemin(Float32)
-        @test mask[3, 1] == typemin(Float32)
+        @test mask[4, 1] == 0.0f0
+        # Upper triangle should be -Inf (cannot attend to future)
+        @test mask[1, 2] == typemin(Float32)
+        @test mask[1, 3] == typemin(Float32)
+        @test mask[2, 3] == typemin(Float32)
 
         @info "CausalMask OK"
     end

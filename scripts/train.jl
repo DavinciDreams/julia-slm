@@ -84,8 +84,8 @@ function main()
     ps, st = Lux.setup(rng, model)
 
     # Count parameters
-    n_params = count_parameters(ps)
-    @info "Model initialized" parameters=n_params params_human=if n_params >= 1_000_000
+    n_params = count_parameters(ps; weight_tying=model_config.weight_tying)
+    @info "Model initialized" parameters=n_params weight_tying=model_config.weight_tying params_human=if n_params >= 1_000_000
         @sprintf("%.2fM", n_params / 1_000_000)
     else
         @sprintf("%.1fK", n_params / 1_000)
@@ -106,19 +106,26 @@ function main()
 
     @info "Data loaded" train_tokens=train_dataset.n_tokens val_tokens=val_dataset.n_tokens
 
-    # Resume from checkpoint if specified
-    if resume_path !== nothing
-        @info "Resuming from $resume_path"
-        ps, st, _, start_step, _ = load_checkpoint(resume_path; device)
-    end
-
     # Update config with actual vocab size
     full_config = Config(model_config, config.training, config.curriculum,
                          config.coreset, config.data, config.inference,
                          config.phase_weights)
 
+    # Resume from checkpoint if specified
+    start_step = 1
+    resume_opt_state = nothing
+    resume_best_val = Inf
+    if resume_path !== nothing
+        @info "Resuming from $resume_path"
+        ps, st, resume_opt_state, start_step, resume_best_val = load_checkpoint(resume_path; device)
+        start_step += 1  # resume from the next step
+        @info "Resuming from step $start_step" best_val_loss=resume_best_val
+    end
+
     # Train
-    ps, st, metrics = train!(model, ps, st, train_loader, val_loader, full_config; device)
+    ps, st, metrics = train!(model, ps, st, train_loader, val_loader, full_config;
+                              device, start_step, opt_state=resume_opt_state,
+                              best_val_loss=resume_best_val)
 
     # Final evaluation
     @info "Running final evaluation..."

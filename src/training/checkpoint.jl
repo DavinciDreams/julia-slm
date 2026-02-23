@@ -10,15 +10,16 @@ Parameters are moved to CPU before saving.
 """
 function save_checkpoint(path::String, ps, st, opt_state, step::Int, config;
                          best_val_loss::Float64=Inf)
-    # Move parameters to CPU for portable serialization
+    # Move everything to CPU for portable serialization
     ps_cpu = Lux.cpu(ps)
     st_cpu = Lux.cpu(st)
+    opt_cpu = Lux.cpu(opt_state)
 
     mkpath(dirname(path))
     JLD2.jldsave(path;
         parameters = ps_cpu,
         states = st_cpu,
-        opt_state = opt_state,
+        opt_state = opt_cpu,
         step = step,
         best_val_loss = best_val_loss,
         config = config,
@@ -36,7 +37,7 @@ function load_checkpoint(path::String; device=identity)
     data = JLD2.load(path)
     ps = device(data["parameters"])
     st = device(data["states"])
-    opt_state = data["opt_state"]
+    opt_state = device(data["opt_state"])
     step = data["step"]
     best_val_loss = get(data, "best_val_loss", Inf)
     @info "Checkpoint loaded from $path (step $step, val_loss=$(round(best_val_loss; digits=4)))"

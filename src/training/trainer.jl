@@ -22,17 +22,13 @@ function cross_entropy_loss(logits, targets)
 end
 
 function _ce_loss(logits, targets, vocab_size)
-    # Manual cross-entropy for integer targets
+    # Vectorized cross-entropy for integer targets (GPU-compatible)
     # logits: (V, N), targets: (N,) of Int
     log_probs = NNlib.logsoftmax(logits; dims=1)
     N = length(targets)
-    # Gather log probs at target indices
-    loss = zero(eltype(logits))
-    for i in 1:N
-        t = targets[i]
-        loss -= log_probs[t, i]
-    end
-    return loss / N
+    # Build one-hot mask: (V, N) — not differentiable, just a selector
+    onehot = Zygote.@ignore eltype(logits).(reshape(1:vocab_size, :, 1) .== reshape(targets, 1, :))
+    return -sum(onehot .* log_probs) / N
 end
 
 """
@@ -82,26 +78,33 @@ function evaluate_loss(model, ps, st, val_loader, eval_steps::Int)
 end
 
 """
-    train!(model, ps, st, train_loader, val_loader, config; device=identity)
+    train!(model, ps, st, train_loader, val_loader, config;
+           device=identity, start_step=1, opt_state=nothing, best_val_loss=Inf)
 
 Main training loop. Trains the model according to the configuration.
+Supports resuming from a checkpoint via start_step and opt_state.
 Returns (ps, st, metrics).
 """
-function train!(model, ps, st, train_loader, val_loader, config::Config; device=identity)
+function train!(model, ps, st, train_loader, val_loader, config::Config;
+                device=identity, start_step::Int=1, opt_state=nothing,
+                best_val_loss::Float64=Inf)
     tc = config.training
     rng = Random.MersenneTwister(tc.seed)
 
-    # Setup optimizer
-    opt = create_optimizer(tc)
-    opt_state = Optimisers.setup(opt, ps)
+    # Setup optimizer (use provided opt_state if resuming)
+    if opt_state === nothing
+        opt = create_optimizer(tc)
+        opt_state = Optimisers.setup(opt, ps)
+    end
 
     # Metrics
     metrics = TrainMetrics()
+    metrics.best_val_loss = best_val_loss
 
-    @info "Starting training" max_steps=tc.max_steps batch_size=tc.batch_size lr=tc.lr
+    @info "Starting training" start_step=start_step max_steps=tc.max_steps batch_size=tc.batch_size lr=tc.lr
     @info "Model parameters" n_params=count_parameters(ps)
 
-    for step in 1:tc.max_steps
+    for step in start_step:tc.max_steps
         metrics.step = step
 
         # Update learning rate
