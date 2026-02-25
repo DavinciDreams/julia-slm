@@ -19,16 +19,14 @@ function cross_entropy_loss(logits, targets; label_smoothing::Float64=0.0)
 end
 
 function _ce_loss(logits, targets, vocab_size; label_smoothing::Float64=0.0)
-    # Vectorized cross-entropy for integer targets using CartesianIndex gather
+    # GPU-compatible cross-entropy using one-hot encoding
+    # (same pattern as Flux.logitcrossentropy used in the working notebooks)
+    V, N = size(logits)
+    oh = onehotbatch(targets, 1:V)
     log_probs = NNlib.logsoftmax(logits; dims=1)
-    N = length(targets)
-    # Gather log probs at target positions — fully vectorized
-    idx = CartesianIndex.(targets, 1:N)
-    target_log_probs = log_probs[idx]
-    nll = -sum(target_log_probs) / N
+    nll = -sum(log_probs .* oh) / N
     if label_smoothing > 0.0
-        # Smooth loss: (1-ε)*NLL + ε*uniform_CE
-        smooth_loss = -sum(log_probs) / (N * vocab_size)
+        smooth_loss = -sum(log_probs) / (N * V)
         return (1 - Float32(label_smoothing)) * nll + Float32(label_smoothing) * smooth_loss
     end
     return nll
@@ -167,6 +165,7 @@ function train!(model, ps, st, train_loader, val_loader, config::Config;
                 @info "New best validation loss" val_loss=round(val_loss; digits=4)
             end
 
+            flush(stderr); flush(stdout)
             reset_metrics!(metrics)
         end
 

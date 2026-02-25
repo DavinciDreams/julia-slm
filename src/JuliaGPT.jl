@@ -9,6 +9,8 @@ using Zygote
 using Random
 using Statistics
 using CUDA
+using LuxCUDA
+using OneHotArrays
 using JLD2
 using JSON3
 using TOML
@@ -30,6 +32,10 @@ export SparseMoE
 # Chunked attention
 include("model/attention.jl")
 export chunked_attention, chunked_causal_attention
+
+# Monarch Mixer
+include("model/monarch.jl")
+export MonarchMatrix, CausalDepthwiseConv1d, MonarchSequenceMixer, MonarchBlock
 
 # Tokenizer
 include("data/tokenizer.jl")

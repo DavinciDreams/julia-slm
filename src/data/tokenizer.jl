@@ -162,7 +162,7 @@ function encode(t::BPETokenizer, text::String)
         bpe_tokens = _bpe_encode_word(encoded_chars, t.merge_ranks)
         for tok in bpe_tokens
             id = get(t.encoder, tok, nothing)
-            id !== nothing && push!(tokens, id)
+            id !== nothing && push!(tokens, id + 1)  # +1 for Julia 1-indexing
         end
     end
     return tokens
@@ -174,11 +174,23 @@ end
 Decode BPE token ids back to text.
 """
 function decode(t::BPETokenizer, ids::AbstractVector{<:Integer})
-    token_strs = [get(t.decoder, id, "") for id in ids]
+    token_strs = [get(t.decoder, id - 1, "") for id in ids]  # -1 to undo Julia 1-indexing
     joined = join(token_strs)
     # Convert unicode chars back to bytes
-    bytes = UInt8[get(t.unicode_to_byte, c, UInt8(c)) for c in joined]
-    return String(bytes)
+    # Note: cannot use get(dict, key, UInt8(c)) — Julia eagerly evaluates the
+    # default, so UInt8(c) throws InexactError for GPT-2 mapped chars (cp > 255).
+    out = UInt8[]
+    sizehint!(out, length(joined))
+    for c in joined
+        b = get(t.unicode_to_byte, c, nothing)
+        if b !== nothing
+            push!(out, b)
+        else
+            # Unmapped char — write its UTF-8 bytes directly
+            append!(out, codeunits(string(c)))
+        end
+    end
+    return String(out)
 end
 
 function _bpe_encode_word(symbols::Vector{String}, merge_ranks::Dict{Tuple{String,String},Int})

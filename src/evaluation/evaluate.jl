@@ -63,7 +63,7 @@ end
 
 Run full evaluation: perplexity, BPC, generation quality metrics.
 """
-function evaluate(model, ps, st, tokenizer::CharTokenizer, val_loader;
+function evaluate(model, ps, st, tokenizer, val_loader;
                   max_batches::Int=0, gen_samples::Int=3, gen_length::Int=200,
                   context_length::Int=256)
     results = Dict{String, Any}()

@@ -9,7 +9,7 @@ Autoregressive text generation with temperature, top-k, and top-p sampling.
 
 Generate text autoregressively from a prompt string.
 """
-function generate(model, ps, st, tokenizer::CharTokenizer, prompt::String;
+function generate(model, ps, st, tokenizer, prompt::String;
                   max_new_tokens::Int=200,
                   temperature::Float64=0.8,
                   top_k::Int=0,

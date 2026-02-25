@@ -1,16 +1,232 @@
-# JuliaGPT: A Pure Julia Small Language Model Trained on Classical Texts
+# Julia SLM — Small Language Models in Pure Julia
 
-## Research Proposal
+Transformer and Monarch Mixer language models built entirely in Julia using [Lux.jl](https://github.com/LuxDL/Lux.jl), trained on the [philosophy-corpus](https://huggingface.co/datasets/LisaMegaWatts/philosophy-corpus) dataset.
 
-**Date:** 2026-02-21
-**Author:** LisaMegaWatts
-**Repository:** julia-slm
+**Models on HuggingFace:** [LisaMegaWatts/julia-slm](https://huggingface.co/LisaMegaWatts/julia-slm)
 
 ---
 
-## Abstract
+## Results
 
-We propose JuliaGPT, a small language model implemented entirely in Julia, trained on a curated corpus of classical philosophical and mathematical texts spanning from Euclid and Aristotle to Kant and Nietzsche. The project explores whether techniques from scientific computing — continuous-depth neural ODEs, adjoint-method backpropagation, sparse Jacobian exploitation, and sensitivity-guided data curation — can produce competitive small language models with significantly less compute than standard approaches. Training targets a single A100 GPU (Google Colab); inference targets consumer GPUs with less than 6GB VRAM. The model architecture draws from Karpathy's nanoGPT while incorporating structured matrix methods from numerical analysis and sparse attention patterns observed in particle physics transformers.
+### Phase 1: Baseline Transformer (5M Chinchilla)
+
+A 5.04M parameter decoder-only transformer trained to Chinchilla-optimal (100M tokens at 20 tokens/param).
+
+| Metric | Value |
+|--------|-------|
+| Parameters | 5,037,312 |
+| Architecture | Decoder-only Transformer (RoPE, SwiGLU, RMSNorm) |
+| Layers | 6 |
+| Embed dim / Heads | 256 / 4 |
+| Context length | 256 |
+| Vocab | 2,000 (ByteLevel BPE) |
+| Final val loss | **3.54** |
+| Final val PPL | **34.5** |
+| Training time | 66 min on RTX 3060 12GB |
+| Throughput | ~26K tok/s |
+
+### Phase 2: Monarch Mixer (5M, first Julia implementation)
+
+A 4.98M parameter Monarch Mixer variant — replaces softmax attention with multi-head Monarch matrix sequence mixing + causal depthwise convolution. SwiGLU FFN retained. To our knowledge, this is the **first Monarch Mixer implementation in Julia**.
+
+| Metric | Value |
+|--------|-------|
+| Parameters | 4,983,040 |
+| Architecture | Monarch Mixer (8-head Monarch + causal conv, SwiGLU, RMSNorm) |
+| Layers | 8 (vs 6 for baseline — Monarch saves params in sequence mixing) |
+| Embed dim / Monarch heads | 256 / 8 |
+| Context length | 256 |
+| Vocab | 2,000 (ByteLevel BPE) |
+| Final val loss | **3.65** |
+| Final val PPL | **38.4** |
+| Training time | 89 min on RTX 3060 12GB |
+| Throughput | ~19K tok/s |
+
+### Head-to-Head Comparison
+
+| | Baseline Transformer | Monarch Mixer | Delta |
+|---|---|---|---|
+| Parameters | 5.04M | 4.98M | -1.1% |
+| Layers | 6 | 8 | +33% |
+| Val Loss | 3.54 | 3.65 | +0.11 |
+| Val PPL | 34.5 | 38.4 | +11.3% |
+| tok/s | 26K | 19K | -27% |
+| Sequence mixer params/block | 262K | 67K | **-74%** |
+
+**Key findings:**
+- Monarch Mixer achieves **89% of the baseline quality** at the same parameter budget
+- The 4x parameter reduction in sequence mixing (67K vs 262K per block) enables 2 extra layers
+- The model learns coherent language generation using only fixed learned mixing patterns — no dynamic attention
+- Throughput is 27% lower due to Monarch matrix realization (O(T^{3/2}) params, O(T^2) compute at T=256 for causal masking)
+- Both models generate coherent English with dialogue, grammar, and philosophical content
+
+### Loss Curves
+
+**Baseline Transformer:**
+| Step | Train Loss | Val Loss | Val PPL |
+|------|-----------|----------|---------|
+| 500 | 6.69 | 5.01 | 149.6 |
+| 2,000 | 4.09 | 4.02 | 56.0 |
+| 6,000 | 3.72 | 3.70 | 40.4 |
+| 10,000 | 3.58 | 3.57 | 35.4 |
+| 12,305 | 3.55 | 3.54 | 34.5 |
+
+**Monarch Mixer:**
+| Step | Train Loss | Val Loss | Val PPL |
+|------|-----------|----------|---------|
+| 500 | 7.28 | 5.58 | 265.4 |
+| 2,000 | 4.29 | 4.21 | 67.6 |
+| 6,000 | 3.83 | 3.81 | 45.3 |
+| 10,000 | 3.69 | 3.68 | 39.6 |
+| 12,305 | 3.66 | 3.65 | 38.4 |
+
+---
+
+## Architecture
+
+### Baseline Transformer
+```
+JuliaGPTModel (transformer)
+├── tok_emb: Embedding(2000 → 256)     # weight-tied with output head
+├── rope: RotaryPositionalEncoding(64, 256)
+├── blocks × 6:
+│   ├── ln1: RMSNorm(256)
+│   ├── attn: CausalSelfAttention(4 heads, 64 dim each)
+│   │   ├── wq, wk, wv: Dense(256 → 256)
+│   │   └── wo: Dense(256 → 256)
+│   ├── ln2: RMSNorm(256)
+│   └── ffn: SwiGLU(256 → 640 → 256)
+├── ln_f: RMSNorm(256)
+└── head: TiedEmbeddingHead → (2000,)
+```
+
+### Monarch Mixer
+```
+JuliaGPTModel (monarch)
+├── tok_emb: Embedding(2000 → 256)     # weight-tied with output head
+├── blocks × 8:
+│   ├── ln1: RMSNorm(256)
+│   ├── seq_mixer: MonarchSequenceMixer
+│   │   ├── conv: CausalDepthwiseConv1d(256, kernel=4)
+│   │   ├── monarchs: 8 × MonarchMatrix(T=256, p=16)
+│   │   │   ├── L1: (16, 16, 16)  # block-diagonal factor
+│   │   │   └── L2: (16, 16, 16)  # block-diagonal factor
+│   │   └── gate: LearnedGate(256)
+│   ├── ln2: RMSNorm(256)
+│   └── ffn: SwiGLU(256 → 640 → 256)
+├── ln_f: RMSNorm(256)
+└── head: TiedEmbeddingHead → (2000,)
+```
+
+**How Monarch sequence mixing works:**
+1. Each head realizes a T×T mixing matrix from factored L1, L2 blocks: M = Pᵀ·BlockDiag(L1)·P·BlockDiag(L2)
+2. A causal mask (lower-triangular 0/1) is applied to enforce autoregressive property
+3. The masked matrix multiplies each head's channel slice along the sequence dimension
+4. A short causal convolution (kernel=4) provides local n-gram context
+5. Conv + Monarch outputs are combined and gated with a learned sigmoid gate
+
+No positional encoding needed — the Monarch matrices learn position-dependent mixing patterns directly.
+
+---
+
+## Usage
+
+### Load and generate
+
+```julia
+using Pkg; Pkg.activate("julia-slm")
+
+include("src/JuliaGPT.jl")
+using .JuliaGPT
+using .JuliaGPT: Lux, CUDA, LuxCUDA
+
+# Load tokenizer
+tok = BPETokenizer("path/to/vocab.json", "path/to/merges.txt")
+
+# Load checkpoint
+device = Lux.gpu_device()  # or Lux.cpu_device()
+ps, st, _, step, val_loss = load_checkpoint("5m-chinchilla/final.jld2"; device)
+
+# Create model (must match checkpoint architecture)
+model = create_model(ModelConfig(;
+    vocab_size=vocab_size(tok), embed_dim=256, n_layers=6,
+    n_heads=4, head_dim=64, ffn_mult=4, context_length=256,
+    weight_tying=true,
+))
+
+# Generate
+text = generate(model, ps, st, tok, "the nature of ";
+               max_new_tokens=200, temperature=0.8, top_k=40)
+println(text)
+```
+
+### Train baseline
+```bash
+julia --project scripts/train.jl --config config/5m.toml
+```
+
+### Train Monarch variant
+```bash
+julia --project scripts/train.jl --config config/5m-monarch.toml
+```
+
+### Resume training
+```bash
+julia --project scripts/train.jl --config config/5m.toml --resume checkpoints/step_12000.jld2
+```
+
+---
+
+## Dataset
+
+Trained on [LisaMegaWatts/philosophy-corpus](https://huggingface.co/datasets/LisaMegaWatts/philosophy-corpus) — a curated collection of 981 source texts (BookCorpus, WikiText-103, PG-19, classical philosophy) processed through a custom text pipeline with deduplication and quality scoring.
+
+- **Train tokens**: 794.9M (pre-encoded as `train.bin`)
+- **Val tokens**: 88.2M (pre-encoded as `val.bin`)
+- **Tokenizer**: ByteLevel BPE, 2,000 vocab
+
+---
+
+## Framework
+
+Built with:
+- [Lux.jl](https://github.com/LuxDL/Lux.jl) — Explicit-parameter neural networks
+- [Zygote.jl](https://github.com/FluxML/Zygote.jl) — Automatic differentiation
+- [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) — GPU acceleration
+- [Optimisers.jl](https://github.com/FluxML/Optimisers.jl) — AdamW with cosine LR
+- [NNlib.jl](https://github.com/FluxML/NNlib.jl) — Softmax, activations, batched_mul
+- [OneHotArrays.jl](https://github.com/FluxML/OneHotArrays.jl) — GPU-compatible cross-entropy
+
+---
+
+## Files
+
+```
+config/
+├── 5m.toml              # Baseline transformer config
+└── 5m-monarch.toml      # Monarch Mixer config
+
+src/model/
+├── config.jl            # ModelConfig, load_config
+├── layers.jl            # RMSNorm, SwiGLU, causal mask
+├── julia_gpt.jl         # JuliaGPTModel, create_model (dispatches on arch)
+├── monarch.jl           # MonarchMatrix, MonarchSequenceMixer, MonarchBlock
+├── moe.jl               # SparseMoE (optional)
+└── attention.jl         # Chunked attention (optional)
+```
+
+Checkpoints (JLD2 format) contain: model parameters, model state, optimizer state, step number, and best validation loss.
+
+## License
+
+MIT
+
+---
+
+## Research Proposal (Original)
+
+**Date:** 2026-02-21
+**Author:** LisaMegaWatts
 
 ---
 

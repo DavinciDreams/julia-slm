@@ -9,14 +9,35 @@ mutable struct TextDataset
 end
 
 """
-    TextDataset(path::String, tokenizer::CharTokenizer) -> TextDataset
+    TextDataset(path::String, tokenizer) -> TextDataset
 
 Load a text file and encode it into token indices.
+Works with any tokenizer that implements `encode(tokenizer, text)`.
 """
-function TextDataset(path::String, tokenizer::CharTokenizer)
+function TextDataset(path::String, tokenizer)
     text = read(path, String)
     tokens = encode(tokenizer, text)
     return TextDataset(tokens, length(tokens))
+end
+
+"""
+    TextDataset(bin_path::String) -> TextDataset
+
+Load pre-encoded tokens from a .bin file (written by encode_corpus.py).
+Format: "JTOK" magic (4B) + n_tokens (UInt64) + offset (Int32) + Int32 token data.
+"""
+function TextDataset(bin_path::String)
+    @assert endswith(bin_path, ".bin") "Expected .bin file, got: $bin_path"
+    open(bin_path, "r") do f
+        magic = read(f, 4)
+        @assert magic == UInt8[0x4a, 0x54, 0x4f, 0x4b] "Bad magic: expected JTOK"
+        n_tokens = read(f, UInt64)
+        _offset = read(f, Int32)  # already applied during encoding
+        raw = Vector{Int32}(undef, n_tokens)
+        read!(f, raw)
+        tokens = Vector{Int}(raw)  # promote Int32 → Int (Int64)
+        return TextDataset(tokens, Int(n_tokens))
+    end
 end
 
 mutable struct DataLoader

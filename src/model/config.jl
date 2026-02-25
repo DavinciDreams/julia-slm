@@ -22,6 +22,9 @@ Base.@kwdef struct ModelConfig
     # Chunked attention
     use_chunked_attn::Bool = false
     attn_chunk_size::Int = 64
+    # Monarch Mixer
+    n_monarch_heads::Int = 8
+    conv_kernel_size::Int = 4
 end
 
 Base.@kwdef struct TrainingConfig
@@ -59,6 +62,7 @@ Base.@kwdef struct DataConfig
     train_path::String = "../text-pipeline/output/train.txt"
     val_path::String = "../text-pipeline/output/val.txt"
     enriched_path::String = "../text-pipeline/output/train_enriched.jsonl"
+    tokenizer_dir::String = ""  # path to dir with vocab.json+merges.txt; empty = char tokenizer
 end
 
 Base.@kwdef struct InferenceConfig
@@ -104,6 +108,8 @@ function load_config(path::String)
         moe_top_k = get(m, "moe_top_k", 2),
         use_chunked_attn = get(m, "use_chunked_attn", false),
         attn_chunk_size = get(m, "attn_chunk_size", 64),
+        n_monarch_heads = get(m, "n_monarch_heads", 8),
+        conv_kernel_size = get(m, "conv_kernel_size", 4),
     )
 
     t = get(raw, "training", Dict())
@@ -145,6 +151,7 @@ function load_config(path::String)
         train_path = get(d, "train_path", "../text-pipeline/output/train.txt"),
         val_path = get(d, "val_path", "../text-pipeline/output/val.txt"),
         enriched_path = get(d, "enriched_path", "../text-pipeline/output/train_enriched.jsonl"),
+        tokenizer_dir = get(d, "tokenizer_dir", ""),
     )
 
     i = get(raw, "inference", Dict())

@@ -12,6 +12,7 @@ Pkg.activate(joinpath(@__DIR__, ".."))
 
 include(joinpath(@__DIR__, "..", "src", "JuliaGPT.jl"))
 using .JuliaGPT
+using .JuliaGPT: Lux, CUDA
 using Random
 using Printf
 
@@ -54,11 +55,20 @@ function main()
         Lux.cpu_device()
     end
 
-    # Load training data and build tokenizer
-    @info "Loading training data from $(config.data.train_path)"
-    train_text = read(config.data.train_path, String)
-    tokenizer = CharTokenizer(train_text)
-    @info "Vocabulary" size=vocab_size(tokenizer) chars=join(tokenizer.idx_to_char)
+    # Load tokenizer
+    tokenizer = if !isempty(config.data.tokenizer_dir)
+        vocab_path = joinpath(config.data.tokenizer_dir, "vocab.json")
+        merges_path = joinpath(config.data.tokenizer_dir, "merges.txt")
+        @info "Loading BPE tokenizer from $(config.data.tokenizer_dir)"
+        BPETokenizer(vocab_path, merges_path)
+    else
+        @info "Building character tokenizer from $(config.data.train_path)"
+        train_text = read(config.data.train_path, String)
+        tok = CharTokenizer(train_text)
+        @info "Vocabulary" size=vocab_size(tok) chars=join(tok.idx_to_char)
+        tok
+    end
+    @info "Tokenizer" type=typeof(tokenizer) vocab=vocab_size(tokenizer)
 
     # Update model config with actual vocab size
     model_config = ModelConfig(;
@@ -73,6 +83,8 @@ function main()
         dropout = config.model.dropout,
         bias = config.model.bias,
         weight_tying = config.model.weight_tying,
+        n_monarch_heads = config.model.n_monarch_heads,
+        conv_kernel_size = config.model.conv_kernel_size,
     )
 
     # Create model
@@ -95,9 +107,24 @@ function main()
     ps = device(ps)
     st = device(st)
 
-    # Create data loaders
-    train_dataset = TextDataset(config.data.train_path, tokenizer)
-    val_dataset = TextDataset(config.data.val_path, tokenizer)
+    # Create data loaders — prefer pre-encoded .bin files when available
+    train_bin = replace(config.data.train_path, r"\.txt$" => ".bin")
+    val_bin = replace(config.data.val_path, r"\.txt$" => ".bin")
+
+    train_dataset = if isfile(train_bin)
+        @info "Loading pre-encoded tokens from $train_bin"
+        TextDataset(train_bin)
+    else
+        @info "Encoding training data on-the-fly (slow for BPE)"
+        TextDataset(config.data.train_path, tokenizer)
+    end
+
+    val_dataset = if isfile(val_bin)
+        @info "Loading pre-encoded tokens from $val_bin"
+        TextDataset(val_bin)
+    else
+        TextDataset(config.data.val_path, tokenizer)
+    end
 
     train_loader = DataLoader(train_dataset, config.training.batch_size,
                               model_config.context_length; device)
@@ -105,6 +132,7 @@ function main()
                             model_config.context_length; device)
 
     @info "Data loaded" train_tokens=train_dataset.n_tokens val_tokens=val_dataset.n_tokens
+    flush(stderr); flush(stdout)
 
     # Update config with actual vocab size
     full_config = Config(model_config, config.training, config.curriculum,

@@ -1,0 +1,49 @@
+# 5M Monarch Mixer config — same param budget as 5m.toml
+# 8 blocks (vs 6 for transformer) due to cheaper sequence mixing
+# Monarch sequence mixer: 67K params/block vs 262K for attention
+
+[model]
+arch = "monarch"
+embed_dim = 256
+n_layers = 8
+n_heads = 4           # unused by Monarch, kept for struct compat
+head_dim = 64          # unused by Monarch
+n_monarch_heads = 8
+conv_kernel_size = 4
+ffn_mult = 4
+context_length = 256
+dropout = 0.0
+bias = false
+weight_tying = true
+
+[training]
+optimizer = "adamw"
+lr = 6e-4
+min_lr = 6e-5
+warmup_steps = 500
+max_steps = 12305
+batch_size = 32
+grad_clip = 1.0
+precision = "f16"
+eval_interval = 500
+eval_steps = 25
+checkpoint_interval = 2000
+seed = 42
+
+[training.curriculum]
+enabled = false
+
+[training.coreset]
+enabled = false
+
+[data]
+train_path = "../text-pipeline/output/train.txt"
+val_path = "../text-pipeline/output/val.txt"
+tokenizer_dir = "../text-pipeline/output"
+
+[inference]
+precision = "f16"
+compile = false
+temperature = 0.8
+top_k = 40
+max_new_tokens = 500

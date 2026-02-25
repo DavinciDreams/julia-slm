@@ -207,13 +207,27 @@ Uses weight tying (shared embedding/output weights) when config.weight_tying is 
 """
 function create_model(config::ModelConfig)
     tok_emb = Lux.Embedding(config.vocab_size => config.embed_dim)
-    rope = RotaryEmbedding(config.head_dim, config.context_length)
 
-    block_layers = [
-        TransformerBlock(config.embed_dim, config.n_heads, config.head_dim;
-                         ffn_mult=config.ffn_mult, dropout=config.dropout)
-        for _ in 1:config.n_layers
-    ]
+    if config.arch == "monarch"
+        # Monarch: dummy RoPE (won't be used), MonarchBlocks
+        rope = RotaryEmbedding(64, config.context_length)
+        block_layers = [
+            MonarchBlock(config.embed_dim, config.context_length,
+                         config.n_monarch_heads;
+                         ffn_mult=config.ffn_mult,
+                         conv_kernel=config.conv_kernel_size)
+            for _ in 1:config.n_layers
+        ]
+    else
+        # Standard transformer
+        rope = RotaryEmbedding(config.head_dim, config.context_length)
+        block_layers = [
+            TransformerBlock(config.embed_dim, config.n_heads, config.head_dim;
+                             ffn_mult=config.ffn_mult, dropout=config.dropout)
+            for _ in 1:config.n_layers
+        ]
+    end
+
     # Store blocks as NamedTuple for Lux container compatibility
     block_names = Tuple(Symbol("block_$i") for i in 1:config.n_layers)
     blocks = NamedTuple{block_names}(Tuple(block_layers))
@@ -239,9 +253,17 @@ function (model::JuliaGPTModel)(x, ps, st)
     rope_sin = st.rope.sin_cache
     st_rope = st.rope
 
-    # Causal mask for this sequence length — not differentiable (constant)
-    mask = Zygote.@ignore make_causal_mask(T; dtype=eltype(h))
-    mask = Zygote.@ignore _to_device(h, mask)
+    # Causal mask — format depends on architecture
+    if model.config.arch == "monarch"
+        # Monarch: multiplicative 0/1 mask (1 = allowed, 0 = blocked)
+        CL = model.config.context_length
+        mask = Zygote.@ignore Float32[j <= i ? 1.0f0 : 0.0f0 for i in 1:CL, j in 1:CL]
+        mask = Zygote.@ignore _to_device(h, mask)
+    else
+        # Transformer: additive 0/-Inf mask (0 = allowed, -Inf = blocked)
+        mask = Zygote.@ignore make_causal_mask(T; dtype=eltype(h))
+        mask = Zygote.@ignore _to_device(h, mask)
+    end
 
     # Transformer blocks
     block_states = Dict{Symbol, Any}()
